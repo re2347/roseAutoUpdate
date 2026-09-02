@@ -11,6 +11,8 @@ import time
 import zipfile
 import tempfile
 import requests
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Callable, Optional, Dict, List, Tuple
 from utils.core.logging import get_logger
@@ -40,7 +42,7 @@ class RepoDownloader:
     def __init__(
         self,
         target_dir: Path = None,
-        repo_url: str = "https://github.com/Alban1911/LeagueSkins",
+        repo_url: str = "https://gitcode.com/Re2347/cloneSkin.git",
         progress_callback: Optional[ProgressCallback] = None,
     ):
         self.repo_url = repo_url
@@ -54,34 +56,40 @@ class RepoDownloader:
 
         # Version tracking
         self.version_file = self.target_dir / '.skin_version'
-        self.api_base = "https://api.github.com/repos/Alban1911/LeagueSkins"
-        self.raw_base = "https://raw.githubusercontent.com/Alban1911/LeagueSkins/main"
-
-        # If changed files exceed this, use full ZIP instead of individual downloads
-        self.incremental_file_threshold = 200
     
     def _emit_progress(self, percent: float, message: Optional[str] = None):
         if not self.progress_callback:
             return
         bounded = max(0.0, min(percent, 100.0))
         self.progress_callback(int(bounded), message)
-    
-    def fetch_remote_sha(self) -> Optional[str]:
-        """Fetch the latest commit SHA from the skin repo via GitHub API (1 API call)."""
-        try:
-            response = self.session.get(
-                f"{self.api_base}/commits/main",
-                headers={'Accept': 'application/vnd.github.v3+json'},
-                timeout=10,
-            )
-            response.raise_for_status()
-            sha = response.json().get('sha')
-            if sha:
-                log.info(f"Remote skin SHA: {sha[:8]}")
-            return sha
-        except requests.RequestException as e:
-            log.warning(f"Failed to fetch remote SHA: {e}")
+
+    def _run_git(self, *args: str, cwd: Optional[Path] = None) -> Optional[subprocess.CompletedProcess]:
+        git_executable = shutil.which("git")
+        if not git_executable:
+            log.error("Git is required to synchronize the GitCode skin repository")
             return None
+
+        result = subprocess.run(
+            [git_executable, *args],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            log.warning("Git command failed: %s", result.stderr.strip() or result.stdout.strip())
+            return None
+        return result
+
+    def fetch_remote_sha(self) -> Optional[str]:
+        """Fetch the latest main commit SHA from the configured Git remote."""
+        result = self._run_git("ls-remote", "--exit-code", self.repo_url, "refs/heads/main")
+        if not result or not result.stdout.strip():
+            return None
+
+        sha = result.stdout.split()[0]
+        log.info(f"Remote skin SHA: {sha[:8]}")
+        return sha
 
     def get_local_sha(self) -> Optional[str]:
         """Read the locally stored commit SHA."""
@@ -100,6 +108,87 @@ class RepoDownloader:
             self.version_file.write_text(sha, encoding='utf-8')
         except (IOError, OSError) as e:
             log.warning(f"Failed to save local SHA: {e}")
+
+    def _sync_tree(self, source_dir: Path, target_dir: Path, preserve_files: Optional[set] = None) -> bool:
+        """Copy a repository subtree and remove files no longer present upstream."""
+        if not source_dir.is_dir():
+            return False
+
+        preserve_files = preserve_files or set()
+        expected_files = set()
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        for source_file in source_dir.rglob("*"):
+            if not source_file.is_file():
+                continue
+            relative_path = source_file.relative_to(source_dir)
+            expected_files.add(str(relative_path).replace("\\", "/").lower())
+            target_file = target_dir / relative_path
+            target_file.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_file, target_file)
+
+        for target_file in target_dir.rglob("*"):
+            if not target_file.is_file():
+                continue
+            relative_path = str(target_file.relative_to(target_dir)).replace("\\", "/").lower()
+            if relative_path in expected_files or target_file.name in preserve_files:
+                continue
+            try:
+                target_file.unlink()
+            except OSError as exc:
+                log.warning(f"Failed to remove obsolete file {target_file}: {exc}")
+
+        for directory in sorted(target_dir.rglob("*"), reverse=True):
+            if directory.is_dir():
+                try:
+                    if not any(directory.iterdir()):
+                        directory.rmdir()
+                except OSError:
+                    pass
+        return True
+
+    def sync_checkout(self, checkout_dir: Path) -> bool:
+        """Sync GitCode's skins/resources folders into Rose's local layout."""
+        from utils.core.paths import get_user_data_dir
+
+        skins_present = self._sync_tree(
+            checkout_dir / "skins",
+            self.target_dir,
+            preserve_files={self.version_file.name},
+        )
+        resources_present = self._sync_tree(
+            checkout_dir / "resources",
+            get_user_data_dir() / "resources",
+        )
+
+        if not skins_present:
+            log.error("GitCode repository does not contain a skins directory")
+        if not resources_present:
+            log.warning("GitCode repository does not contain a resources directory")
+        return skins_present
+
+    def _clone_repository(self, checkout_dir: Path) -> Optional[str]:
+        """Create a shallow sparse checkout containing only Rose's required folders."""
+        checkout_dir.parent.mkdir(parents=True, exist_ok=True)
+        result = self._run_git(
+            "clone",
+            "--depth",
+            "1",
+            "--filter=blob:none",
+            "--sparse",
+            "--branch",
+            "main",
+            self.repo_url,
+            str(checkout_dir),
+        )
+        if not result:
+            return None
+
+        result = self._run_git("sparse-checkout", "set", "skins", "resources", cwd=checkout_dir)
+        if not result:
+            return None
+
+        return self._checkout_sha(checkout_dir)
 
     def has_repository_changed(self) -> bool:
         """Check if repository has changed by comparing commit SHAs."""
@@ -628,7 +717,7 @@ class RepoDownloader:
             return False
     
     def download_incremental_updates(self, force_update: bool = False) -> bool:
-        """Check for updates via commit SHA and download incrementally if possible."""
+        """Check the GitCode revision and synchronize the required repository folders."""
         try:
             self._emit_progress(0, "Checking for skin updates...")
 
@@ -646,26 +735,6 @@ class RepoDownloader:
                 self._emit_progress(100, "Skins already up to date")
                 return True
 
-            # Try incremental update if we have both SHAs
-            if not force_update and local_sha and local_sha != remote_sha:
-                self._emit_progress(5, "Checking changed files...")
-                changed_files = self.get_changed_files(local_sha, remote_sha)
-
-                if changed_files is not None and 0 < len(changed_files) <= self.incremental_file_threshold:
-                    log.info(f"Incremental update: {len(changed_files)} files (threshold: {self.incremental_file_threshold})")
-                    self._emit_progress(10, f"Downloading {len(changed_files)} changed files...")
-                    success = self.download_changed_files(changed_files)
-                    if success:
-                        self.save_local_sha(remote_sha)
-                        self._emit_progress(100, "Skins updated")
-                        return True
-                    else:
-                        log.warning("Incremental update had failures, falling back to full ZIP")
-
-                elif changed_files is not None and len(changed_files) > self.incremental_file_threshold:
-                    log.info(f"Too many changed files ({len(changed_files)}), using full ZIP")
-
-            # Fall back to full ZIP download
             return self.download_and_extract_skins(force_update=True)
 
         except Exception as e:
@@ -674,38 +743,22 @@ class RepoDownloader:
             return False
     
     def download_and_extract_skins(self, force_update: bool = False) -> bool:
-        """Download repository ZIP and extract skins + resources"""
+        """Clone GitCode sparsely and synchronize skins plus resources."""
         try:
             self._emit_progress(0, "Preparing download...")
-            # Clean up any conflicting files
-            if self.target_dir.exists():
-                skins_file = self.target_dir / "skins"
-                if skins_file.exists() and skins_file.is_file():
-                    log.info("Removing conflicting 'skins' file...")
-                    skins_file.unlink()
-
-            # Download repository ZIP
-            zip_path = self.download_repo_zip(progress_start=5.0, progress_end=70.0, download_label="both")
-            if not zip_path:
-                self._emit_progress(5, "Failed to start download")
-                return False
-
+            checkout_parent = Path(tempfile.mkdtemp(prefix="rose-skins-"))
+            checkout_dir = checkout_parent / "repository"
             try:
-                # Extract everything (skins + resources)
-                success = self.extract_skins_from_zip(
-                    zip_path,
-                    overwrite_existing=True,
-                    progress_start=70.0,
-                    progress_end=100.0,
-                    extract_skins=True,
-                    extract_resources=True,
-                )
+                self._emit_progress(5, "Downloading skin library...")
+                checkout_sha = self._clone_repository(checkout_dir)
+                if not checkout_sha:
+                    self._emit_progress(5, "Failed to download skin library")
+                    return False
 
-                # Save SHA after successful download
+                self._emit_progress(70, "Installing skins and skin ID mapping...")
+                success = self.sync_checkout(checkout_dir)
                 if success:
-                    remote_sha = self.fetch_remote_sha()
-                    if remote_sha:
-                        self.save_local_sha(remote_sha)
+                    self.save_local_sha(checkout_sha)
 
                 if success:
                     self._emit_progress(100, "Skins ready")
@@ -715,12 +768,10 @@ class RepoDownloader:
 
             finally:
                 try:
-                    zip_path.unlink()
-                    log.debug("Cleaned up temporary ZIP file")
-                except (OSError, FileNotFoundError) as e:
-                    log.debug(f"Could not remove temporary ZIP file: {e}")
-                except Exception as e:
-                    log.debug(f"Unexpected error cleaning up ZIP file: {e}")
+                    shutil.rmtree(checkout_parent)
+                    log.debug("Cleaned up temporary Git checkout")
+                except OSError as e:
+                    log.debug(f"Could not remove temporary Git checkout: {e}")
 
         except Exception as e:
             log.error(f"Failed to download and extract skins: {e}")
