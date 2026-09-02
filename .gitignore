@@ -23,6 +23,7 @@ develop-eggs/
 dist/
 dist_updater/
 downloads/
+/release/
 eggs/
 .eggs/
 lib/

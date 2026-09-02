@@ -5,6 +5,7 @@ Handles downloading update files from GitHub releases
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -59,6 +60,26 @@ class UpdateDownloader:
             status_callback(f"Download failed: {exc}")
             updater_log.error(f"Update download failed: {exc}")
             return False
+
+    def verify_sha256(self, path: Path, expected_sha256: str) -> bool:
+        """Return True when a downloaded file matches the expected SHA-256."""
+        expected = expected_sha256.strip().lower()
+        digest = hashlib.sha256()
+        try:
+            with open(path, "rb") as fh:
+                for chunk in iter(lambda: fh.read(self.chunk_size), b""):
+                    digest.update(chunk)
+        except Exception as exc:  # noqa: BLE001
+            updater_log.error(f"Failed to hash downloaded update: {exc}")
+            return False
+
+        actual = digest.hexdigest()
+        if actual != expected:
+            updater_log.error(
+                f"Update checksum mismatch for {path}: expected {expected}, got {actual}"
+            )
+            return False
+        return True
     
     def download_hash_file(
         self,
@@ -89,4 +110,3 @@ class UpdateDownloader:
             status_callback(f"Warning: failed to download hash file: {exc}")
             updater_log.warning(f"Hash file download failed: {exc}")
             return False
-

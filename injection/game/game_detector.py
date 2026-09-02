@@ -47,8 +47,8 @@ class GameDetector:
             else:
                 log.warning(f"Config paths are invalid: league={config_league_path}, client={config_client_path}")
         
-        # If no valid config, try to detect via LeagueClient.exe
-        log.debug("Config not found or invalid, detecting via LeagueClient.exe")
+        # If no valid config, try to detect via League client processes
+        log.debug("Config not found or invalid, detecting via League client process")
         detected_league_path, detected_client_path = self._detect_via_leagueclient()
         
         if detected_league_path and detected_client_path:
@@ -67,22 +67,23 @@ class GameDetector:
         return league_path
     
     def _detect_via_leagueclient(self) -> Tuple[Optional[Path], Optional[Path]]:
-        """Detect League paths by finding running LeagueClient.exe process.
+        """Detect League paths by finding a running League client process.
         Returns (game_path, client_path) tuple."""
         if not PSUTIL_AVAILABLE:
-            log.debug("psutil not available, skipping LeagueClient.exe detection")
+            log.debug("psutil not available, skipping League client process detection")
             return None, None
             
         try:
-            log.debug("Looking for LeagueClient.exe process...")
+            log.debug("Looking for League client process...")
             
-            # Find LeagueClient.exe process
+            # LeagueClientUx.exe is the reliable process on WeGame installs.
+            client_processes = {"LeagueClient.exe", "LeagueClientUx.exe"}
             for proc in psutil.process_iter(['pid', 'name', 'exe']):
                 try:
-                    if proc.info['name'] == 'LeagueClient.exe':
+                    if proc.info['name'] in client_processes:
                         exe_path = proc.info['exe']
                         if exe_path:
-                            log.debug(f"Found LeagueClient.exe at: {exe_path}")
+                            log.debug(f"Found League client process at: {exe_path}")
                             
                             # Convert to Path and get parent directory
                             client_path = Path(exe_path)
@@ -112,14 +113,22 @@ class GameDetector:
                                 if parent_league_exe.exists():
                                     log_success(log, f"Found League via parent directory: game={parent_league_dir}, client={client_dir}", "")
                                     return parent_league_dir, client_dir
+
+                                # WeGame uses sibling LeagueClient and Game directories:
+                                # <install>/LeagueClient and <install>/Game.
+                                sibling_league_dir = parent_dir / "Game"
+                                sibling_league_exe = sibling_league_dir / "League of Legends.exe"
+                                log.debug(f"Trying WeGame sibling directory: {sibling_league_exe}")
+                                if sibling_league_exe.exists():
+                                    log_success(log, f"Found League via WeGame directory: game={sibling_league_dir}, client={client_dir}", "")
+                                    return sibling_league_dir, client_dir
                                 
                 except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                     continue
             
-            log.debug("No LeagueClient.exe process found")
+            log.debug("No League client process found")
             return None, None
             
         except Exception as e:
             log.warning(f"Error detecting via LeagueClient.exe: {e}")
             return None, None
-

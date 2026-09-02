@@ -1,0 +1,57 @@
+version: 2.1
+
+jobs:
+  build-test-package-publish:
+    resource_class: windows.medium
+    environment:
+      PYTHONUTF8: "1"
+    machine:
+      image: windows-server-2022-gui:current
+      shell: powershell.exe -ExecutionPolicy Bypass
+    steps:
+      - checkout
+
+      - run:
+          name: Test, build, package, and publish Rose CN
+          no_output_timeout: 30m
+          command: |
+            $ErrorActionPreference = "Stop"
+
+            if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
+              choco install python --version=3.11.9 -y
+            }
+
+            python --version
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+
+            if (-not [string]::IsNullOrWhiteSpace($env:ROSE_RELEASE_VERSION)) {
+              python scripts/set_app_version.py $env:ROSE_RELEASE_VERSION
+            }
+
+            python -m unittest discover -v
+            python scripts/build_pyinstaller.py
+            python scripts/package_cn_release.py --output-dir release
+
+            if ([string]::IsNullOrWhiteSpace($env:GITCODE_TOKEN)) {
+              throw "Missing GITCODE_TOKEN CircleCI environment variable."
+            }
+
+            $version = python -c "import json; print(json.load(open('release/latest.json', encoding='utf-8'))['version'])"
+            python scripts/publish_gitcode_release.py `
+              --manifest release/latest.json `
+              --zip "release/Rose-CN-$version.zip" `
+              --skip-if-current
+
+      - store_artifacts:
+          path: release
+          destination: rose-cn-release
+
+workflows:
+  cn-release:
+    jobs:
+      - build-test-package-publish:
+          filters:
+            branches:
+              only:
+                - cn
