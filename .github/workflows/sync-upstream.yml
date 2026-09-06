@@ -22,7 +22,7 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
-          token: ${{ secrets.ROSE_MIRROR_SYNC_TOKEN }}
+          token: ${{ github.token }}
 
       - name: Configure git
         run: |

@@ -35,11 +35,11 @@ Your PC does not need to be online for steps 1-9 once the cloud secrets are set.
 
 Add this secret to the cloud CI project:
 
-- `ROSE_MIRROR_SYNC_TOKEN`: a GitHub token with write access to this
-  repository. The GitHub Actions sync workflow uses it to update `main` and
-  `cn`.
 - `GITCODE_TOKEN`: a GitCode token that can create releases, upload release
   attachments, and update files in `Re2347/guoneibanrosedl`.
+
+The GitHub Actions sync workflow uses the built-in workflow token to update
+`main` and `cn`, so no extra GitHub sync secret is needed.
 
 The sync workflow uses GitHub Actions because it can safely poll upstream on a
 schedule. CircleCI still handles the Windows build runner, and GitCode stays
