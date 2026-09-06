@@ -12,15 +12,47 @@ jobs:
       - checkout
 
       - run:
-          name: Test, build, package, and publish Rose CN
-          no_output_timeout: 30m
+          name: Prepare Python
+          no_output_timeout: 60m
           command: |
             $ErrorActionPreference = "Stop"
+
+            function Invoke-WithRetry {
+              param(
+                [Parameter(Mandatory = $true)]
+                [string]$Name,
+                [Parameter(Mandatory = $true)]
+                [scriptblock]$Script,
+                [int]$Attempts = 3,
+                [int]$DelaySeconds = 20
+              )
+
+              for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+                try {
+                  Write-Host "==> $Name (attempt $attempt/$Attempts)"
+                  $global:LASTEXITCODE = 0
+                  & $Script
+                  if ($LASTEXITCODE -ne 0) {
+                    throw "${Name} exited with code $LASTEXITCODE."
+                  }
+                  return
+                } catch {
+                  if ($attempt -eq $Attempts) {
+                    throw
+                  }
+
+                  Write-Host "==> $Name failed: $($_.Exception.Message)"
+                  Start-Sleep -Seconds ($DelaySeconds * $attempt)
+                }
+              }
+            }
 
             $pythonExe = "C:\Python311\python.exe"
 
             if (-not (Test-Path $pythonExe)) {
-              choco install python --version=3.11.9 -y --allow-downgrade
+              Invoke-WithRetry -Name "Install Python 3.11" -Script {
+                choco install python --version=3.11.9 -y --allow-downgrade
+              }
             }
 
             if (-not (Test-Path $pythonExe)) {
@@ -28,26 +60,132 @@ jobs:
             }
 
             & $pythonExe --version
-            & $pythonExe -m pip install --upgrade pip
-            & $pythonExe -m pip install -r requirements.txt
 
             if (-not [string]::IsNullOrWhiteSpace($env:ROSE_RELEASE_VERSION)) {
               & $pythonExe scripts/set_app_version.py $env:ROSE_RELEASE_VERSION
             }
 
-            & $pythonExe -m unittest discover -v
-            & $pythonExe scripts/build_pyinstaller.py
-            & $pythonExe scripts/package_cn_release.py --output-dir release
+      - run:
+          name: Install Python dependencies
+          no_output_timeout: 60m
+          command: |
+            $ErrorActionPreference = "Stop"
+
+            function Invoke-WithRetry {
+              param(
+                [Parameter(Mandatory = $true)]
+                [string]$Name,
+                [Parameter(Mandatory = $true)]
+                [scriptblock]$Script,
+                [int]$Attempts = 3,
+                [int]$DelaySeconds = 20
+              )
+
+              for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+                try {
+                  Write-Host "==> $Name (attempt $attempt/$Attempts)"
+                  $global:LASTEXITCODE = 0
+                  & $Script
+                  if ($LASTEXITCODE -ne 0) {
+                    throw "${Name} exited with code $LASTEXITCODE."
+                  }
+                  return
+                } catch {
+                  if ($attempt -eq $Attempts) {
+                    throw
+                  }
+
+                  Write-Host "==> $Name failed: $($_.Exception.Message)"
+                  Start-Sleep -Seconds ($DelaySeconds * $attempt)
+                }
+              }
+            }
+
+            $pythonExe = "C:\Python311\python.exe"
+            if (-not (Test-Path $pythonExe)) {
+              throw "Python 3.11 was not found at $pythonExe."
+            }
+
+            Invoke-WithRetry -Name "Upgrade pip" -Script {
+              & $pythonExe -m pip install --upgrade pip
+            }
+            Invoke-WithRetry -Name "Install Python requirements" -Script {
+              & $pythonExe -m pip install -r requirements.txt
+            }
+
+      - run:
+          name: Run unit tests
+          no_output_timeout: 60m
+          command: |
+            $ErrorActionPreference = "Stop"
+            & "C:\Python311\python.exe" -m unittest discover -v
+
+      - run:
+          name: Build Rose with PyInstaller
+          no_output_timeout: 60m
+          command: |
+            $ErrorActionPreference = "Stop"
+            & "C:\Python311\python.exe" scripts/build_pyinstaller.py
+
+      - run:
+          name: Package Rose CN release
+          no_output_timeout: 60m
+          command: |
+            $ErrorActionPreference = "Stop"
+            & "C:\Python311\python.exe" scripts/package_cn_release.py --output-dir release
+
+      - run:
+          name: Publish GitCode release
+          no_output_timeout: 60m
+          command: |
+            $ErrorActionPreference = "Stop"
 
             if ([string]::IsNullOrWhiteSpace($env:GITCODE_TOKEN)) {
               throw "Missing GITCODE_TOKEN CircleCI environment variable."
             }
 
+            function Invoke-GitCodePublishWithRetry {
+              param(
+                [Parameter(Mandatory = $true)]
+                [scriptblock]$Script,
+                [int]$Attempts = 3,
+                [int]$DelaySeconds = 30
+              )
+
+              for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+                Write-Host "==> Publish GitCode release (attempt $attempt/$Attempts)"
+                $global:LASTEXITCODE = 0
+                $output = & $Script 2>&1
+                $exitCode = $LASTEXITCODE
+                $outputText = ($output | Out-String).Trim()
+
+                if ($outputText) {
+                  Write-Host $outputText
+                }
+
+                if ($exitCode -eq 0) {
+                  return
+                }
+
+                $retryable = $outputText -match "(?i)(timeout|timed out|connection|temporarily|HTTP (408|425|429|5\d{2}))"
+                if (-not $retryable -or $attempt -eq $Attempts) {
+                  throw "GitCode publish exited with code $exitCode."
+                }
+
+                Write-Host "==> GitCode publish temporarily failed; retrying in $DelaySeconds seconds."
+                Start-Sleep -Seconds ($DelaySeconds * $attempt)
+              }
+            }
+            }
+
+            $pythonExe = "C:\Python311\python.exe"
             $version = & $pythonExe -c "import json; print(json.load(open('release/latest.json', encoding='utf-8'))['version'])"
-            & $pythonExe scripts/publish_gitcode_release.py `
-              --manifest release/latest.json `
-              --zip "release/Rose-CN-$version.zip" `
-              --skip-if-current
+            Invoke-GitCodePublishWithRetry -Script {
+              & $pythonExe scripts/publish_gitcode_release.py `
+                --manifest release/latest.json `
+                --zip "release/Rose-CN-$version.zip" `
+                --skip-if-current
+            }
 
       - store_artifacts:
           path: release
