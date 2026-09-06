@@ -16,9 +16,10 @@ GitCode `cloneSkin` mirror, and updates Rose from the GitCode CN release repo.
 
 ## Automated Flow
 
-1. Sync upstream `Alban1911/Rose` into `roseAutoUpdate/main`.
-2. Merge or rebase `main` into `cn`.
-3. Push `cn`.
+1. A GitHub Actions sync workflow fetches upstream `Alban1911/Rose` into
+   `roseAutoUpdate/main`.
+2. The same workflow merges `main` into `cn`.
+3. The same workflow pushes `cn`.
 4. `.circleci/config.yml` runs on a Windows cloud runner.
 5. The workflow runs `python -m unittest discover -v`.
 6. The workflow runs `python scripts/build_pyinstaller.py`.
@@ -28,18 +29,21 @@ GitCode `cloneSkin` mirror, and updates Rose from the GitCode CN release repo.
 9. Installed CN Rose clients read `latest.json`, download the ZIP from GitCode,
    verify SHA-256, and install it.
 
-Your PC does not need to be online for steps 3-9 when the workflow runs on a
-cloud Windows runner.
+Your PC does not need to be online for steps 1-9 once the cloud secrets are set.
 
 ## Required Secret
 
 Add this secret to the cloud CI project:
 
+- `ROSE_MIRROR_SYNC_TOKEN`: a GitHub token with write access to this
+  repository. The GitHub Actions sync workflow uses it to update `main` and
+  `cn`.
 - `GITCODE_TOKEN`: a GitCode token that can create releases, upload release
   attachments, and update files in `Re2347/guoneibanrosedl`.
 
-The workflow uses CircleCI because Rose needs a Windows build runner. GitCode
-stays the public download source.
+The sync workflow uses GitHub Actions because it can safely poll upstream on a
+schedule. CircleCI still handles the Windows build runner, and GitCode stays
+the public download source.
 
 If `Re2347/guoneibanrosedl` is still completely empty, create an initial
 `README.md` on GitCode first so the `main` branch exists before the first
