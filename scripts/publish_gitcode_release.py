@@ -21,6 +21,7 @@ DEFAULT_BRANCH = "main"
 DEFAULT_API_BASE = "https://api.gitcode.com/api/v5"
 DEFAULT_REQUEST_TIMEOUT = 60
 DEFAULT_UPLOAD_TIMEOUT = 300
+DEFAULT_UPLOAD_METHOD = "PUT"
 
 
 class PublishDecision(Enum):
@@ -104,15 +105,46 @@ class GitCodePublisher:
     def upload_asset(self, zip_path: Path, manifest: dict) -> None:
         tag = self._manifest_tag(manifest)
         asset_name = manifest.get("asset_name") or zip_path.name
+        upload_spec = self._get_upload_spec(tag, asset_name)
         with open(zip_path, "rb") as fh:
-            self._request(
-                "POST",
-                f"releases/{quote(tag, safe='')}/attach_files",
-                data={},
-                files={"file": (asset_name, fh, "application/zip")},
-                ok_statuses={200, 201},
+            response = requests.request(
+                upload_spec["method"],
+                upload_spec["url"],
+                data=fh,
+                headers=upload_spec["headers"],
                 timeout=self.upload_timeout,
             )
+        if response.status_code not in {200, 201, 204}:
+            body = response.text[:500].replace(self.token, "***")
+            raise RuntimeError(
+                f"GitCode upload failed with HTTP {response.status_code}: {body}"
+            )
+
+    def _get_upload_spec(self, tag: str, asset_name: str) -> dict[str, object]:
+        response = self._request(
+            "GET",
+            f"releases/{quote(tag, safe='')}/upload_url",
+            params={"file_name": asset_name},
+            ok_statuses={200},
+        )
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"GitCode upload_url response was not a JSON object: {payload!r}")
+
+        upload_url = str(
+            payload.get("upload_url") or payload.get("url") or payload.get("location") or ""
+        )
+        if not upload_url:
+            raise RuntimeError(f"GitCode upload_url response missing upload URL: {payload!r}")
+
+        headers = payload.get("headers") or payload.get("header") or {}
+        if not isinstance(headers, dict):
+            headers = {}
+        headers = {str(key): str(value) for key, value in headers.items()}
+        headers.setdefault("Content-Type", "application/zip")
+
+        method = str(payload.get("method") or payload.get("upload_method") or DEFAULT_UPLOAD_METHOD)
+        return {"method": method.upper(), "url": upload_url, "headers": headers}
 
     def publish_manifest_file(self, manifest: dict, path: str = "latest.json") -> None:
         encoded_path = "/".join(quote(part, safe="") for part in path.split("/"))

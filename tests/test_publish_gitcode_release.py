@@ -90,16 +90,81 @@ class PublishGitCodeReleaseTests(unittest.TestCase):
                 token="token",
             )
 
+            upload_response = mock.Mock(
+                status_code=200,
+                text="",
+                json=mock.Mock(
+                    return_value={
+                        "url": "https://upload.example.com/release.bin",
+                        "headers": {"Content-Type": "application/zip"},
+                    }
+                ),
+            )
+            put_response = mock.Mock(status_code=201, text="")
             with mock.patch(
                 "scripts.publish_gitcode_release.requests.request",
-                return_value=mock.Mock(status_code=201, text=""),
+                side_effect=[upload_response, put_response],
             ) as request:
                 publisher.upload_asset(
                     zip_path,
                     {"version": "1.2.14", "asset_name": zip_path.name},
                 )
 
-            self.assertEqual(request.call_args.kwargs["timeout"], DEFAULT_UPLOAD_TIMEOUT)
+            self.assertEqual(
+                request.call_args_list[1].kwargs["timeout"], DEFAULT_UPLOAD_TIMEOUT
+            )
+
+    def test_upload_asset_uses_gitcode_upload_url_flow(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            zip_path = Path(temp_dir) / "Rose-CN-1.2.14.zip"
+            zip_path.write_bytes(b"rose")
+            publisher = GitCodePublisher(
+                owner="Re2347",
+                repo="guoneibanrosedl",
+                token="token",
+            )
+
+            upload_response = mock.Mock(
+                status_code=200,
+                text="",
+                json=mock.Mock(
+                    return_value={
+                        "url": "https://upload.example.com/release.bin",
+                        "headers": {
+                            "x-obs-meta-project-id": "123",
+                            "x-obs-acl": "public-read",
+                            "x-obs-callback": "callback",
+                            "Content-Type": "application/zip",
+                        },
+                    }
+                ),
+            )
+            put_response = mock.Mock(status_code=201, text="")
+
+            with mock.patch(
+                "scripts.publish_gitcode_release.requests.request",
+                side_effect=[upload_response, put_response],
+            ) as request:
+                publisher.upload_asset(
+                    zip_path,
+                    {"version": "1.2.14", "asset_name": zip_path.name},
+                )
+
+            self.assertEqual(request.call_args_list[0].args[0], "GET")
+            self.assertIn("upload_url", request.call_args_list[0].args[1])
+            self.assertEqual(
+                request.call_args_list[0].kwargs["params"]["file_name"], zip_path.name
+            )
+            self.assertEqual(request.call_args_list[1].args[0], "PUT")
+            self.assertEqual(
+                request.call_args_list[1].args[1], "https://upload.example.com/release.bin"
+            )
+            self.assertEqual(
+                request.call_args_list[1].kwargs["headers"]["x-obs-meta-project-id"], "123"
+            )
+            self.assertEqual(
+                request.call_args_list[1].kwargs["timeout"], DEFAULT_UPLOAD_TIMEOUT
+            )
 
 
 if __name__ == "__main__":
