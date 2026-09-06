@@ -71,6 +71,19 @@ def _cmp_version(a: Optional[tuple[int, ...]], b: Optional[tuple[int, ...]]) -> 
     return (aa > bb) - (aa < bb)
 
 
+def _expected_zip_sha256(release: dict, asset: dict) -> Optional[str]:
+    """Return the expected update ZIP SHA-256 from release metadata."""
+    for value in (
+        asset.get("sha256"),
+        asset.get("checksum"),
+        release.get("sha256"),
+        release.get("checksum"),
+    ):
+        if isinstance(value, str) and value.strip():
+            return value.strip().lower()
+    return None
+
+
 class UpdateSequence:
     """Handles the update checking and installation sequence"""
     
@@ -279,6 +292,13 @@ class UpdateSequence:
             total_size,
         ):
             return False
+
+        expected_sha256 = _expected_zip_sha256(release, asset)
+        if expected_sha256:
+            status_callback("Verifying update package")
+            if not self.downloader.verify_sha256(zip_path, expected_sha256):
+                status_callback("Update package checksum mismatch")
+                return False
         
         # Extract update
         status_callback("Extracting update")
@@ -358,4 +378,3 @@ class UpdateSequence:
         status_callback("Update installed")
         updater_log.info(f"Auto-update completed. Update installed: True")
         return True
-

@@ -54,21 +54,13 @@ class LCUConnection:
         """Initialize from lockfile"""
         lf = find_lockfile(self._explicit_lockfile)
         self.lf_path = lf
-        
-        if not lf:
-            self._disable("LCU lockfile not found")
-            return
-        
-        lockfile_path = Path(lf)
-        if not lockfile_path.is_file():
-            self._disable("LCU lockfile not found")
-            return
+        lockfile_path = Path(lf) if lf else None
         
         try:
             # Parse lockfile
             lockfile_data = parse_lockfile(lf)
             if not lockfile_data:
-                self._disable("LCU lockfile parsing failed")
+                self._disable("LCU credentials unavailable")
                 return
             
             new_credentials = (lockfile_data.port, lockfile_data.password)
@@ -80,11 +72,14 @@ class LCUConnection:
                 and current_credentials == new_credentials
             )
 
-            try:
-                self.lf_mtime = lockfile_path.stat().st_mtime
-            except (OSError, IOError) as e:
-                log.debug(f"Failed to get lockfile mtime: {e}")
-                self.lf_mtime = time.time()
+            if lockfile_path:
+                try:
+                    self.lf_mtime = lockfile_path.stat().st_mtime
+                except (OSError, IOError) as e:
+                    log.debug(f"Failed to get lockfile mtime: {e}")
+                    self.lf_mtime = time.time()
+            else:
+                self.lf_mtime = 0.0
 
             # League may touch the lockfile without changing its endpoint.
             # Do not rebuild the HTTP session or report a false reconnect in
@@ -124,9 +119,9 @@ class LCUConnection:
             lf = find_lockfile(self._explicit_lockfile)
 
             if not lf:
-                self._disable("lockfile not found")
                 self.lf_path = None
                 self.lf_mtime = 0.0
+                self._init_from_lockfile(force=force)
                 return
 
             lockfile_path = Path(lf)
