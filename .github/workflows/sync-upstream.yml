@@ -1,0 +1,53 @@
+name: Sync upstream Rose
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: sync-upstream-rose
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out mirror
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.ROSE_MIRROR_SYNC_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "Rose Mirror Bot"
+          git config user.email "rose-mirror-bot@users.noreply.github.com"
+
+      - name: Sync upstream into main and cn
+        env:
+          UPSTREAM_REPO: https://github.com/Alban1911/Rose.git
+        run: |
+          set -euo pipefail
+
+          if git remote get-url upstream >/dev/null 2>&1; then
+            git remote set-url upstream "$UPSTREAM_REPO"
+          else
+            git remote add upstream "$UPSTREAM_REPO"
+          fi
+
+          git fetch origin main cn --prune
+          git fetch upstream main --prune
+
+          git checkout -B main origin/main
+          git rebase upstream/main
+          git push origin HEAD:main --force-with-lease=main:origin/main
+
+          git checkout -B cn origin/cn
+          git merge --no-edit main
+          git push origin HEAD:cn
