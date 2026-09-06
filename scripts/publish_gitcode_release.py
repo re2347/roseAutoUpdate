@@ -185,6 +185,17 @@ def load_manifest(path: Path) -> dict:
     return manifest
 
 
+def _load_calculate_sha256():
+    try:
+        from scripts.package_cn_release import calculate_sha256
+    except ModuleNotFoundError as exc:
+        if exc.name not in {"scripts", "scripts.package_cn_release"}:
+            raise
+        from package_cn_release import calculate_sha256
+
+    return calculate_sha256
+
+
 def validate_zip(zip_path: Path, manifest: dict) -> None:
     if not zip_path.exists():
         raise FileNotFoundError(zip_path)
@@ -192,9 +203,7 @@ def validate_zip(zip_path: Path, manifest: dict) -> None:
     if not expected_sha:
         raise ValueError("Manifest must include sha256 before publishing")
 
-    from scripts.package_cn_release import calculate_sha256  # pylint: disable=import-outside-toplevel
-
-    actual_sha = calculate_sha256(zip_path)
+    actual_sha = _load_calculate_sha256()(zip_path)
     if actual_sha != expected_sha:
         raise ValueError(
             f"Local ZIP SHA-256 does not match manifest: expected {expected_sha}, got {actual_sha}"
