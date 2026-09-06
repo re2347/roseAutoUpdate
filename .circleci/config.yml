@@ -17,28 +17,34 @@ jobs:
           command: |
             $ErrorActionPreference = "Stop"
 
-            if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
-              choco install python --version=3.11.9 -y
+            $pythonExe = "C:\Python311\python.exe"
+
+            if (-not (Test-Path $pythonExe)) {
+              choco install python --version=3.11.9 -y --allow-downgrade
             }
 
-            python --version
-            python -m pip install --upgrade pip
-            python -m pip install -r requirements.txt
+            if (-not (Test-Path $pythonExe)) {
+              throw "Python 3.11 was not installed at $pythonExe."
+            }
+
+            & $pythonExe --version
+            & $pythonExe -m pip install --upgrade pip
+            & $pythonExe -m pip install -r requirements.txt
 
             if (-not [string]::IsNullOrWhiteSpace($env:ROSE_RELEASE_VERSION)) {
-              python scripts/set_app_version.py $env:ROSE_RELEASE_VERSION
+              & $pythonExe scripts/set_app_version.py $env:ROSE_RELEASE_VERSION
             }
 
-            python -m unittest discover -v
-            python scripts/build_pyinstaller.py
-            python scripts/package_cn_release.py --output-dir release
+            & $pythonExe -m unittest discover -v
+            & $pythonExe scripts/build_pyinstaller.py
+            & $pythonExe scripts/package_cn_release.py --output-dir release
 
             if ([string]::IsNullOrWhiteSpace($env:GITCODE_TOKEN)) {
               throw "Missing GITCODE_TOKEN CircleCI environment variable."
             }
 
-            $version = python -c "import json; print(json.load(open('release/latest.json', encoding='utf-8'))['version'])"
-            python scripts/publish_gitcode_release.py `
+            $version = & $pythonExe -c "import json; print(json.load(open('release/latest.json', encoding='utf-8'))['version'])"
+            & $pythonExe scripts/publish_gitcode_release.py `
               --manifest release/latest.json `
               --zip "release/Rose-CN-$version.zip" `
               --skip-if-current
