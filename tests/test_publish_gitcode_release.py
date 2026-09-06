@@ -6,7 +6,13 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from scripts.publish_gitcode_release import PublishDecision, choose_publish_decision, validate_zip
+from scripts.publish_gitcode_release import (
+    DEFAULT_UPLOAD_TIMEOUT,
+    GitCodePublisher,
+    PublishDecision,
+    choose_publish_decision,
+    validate_zip,
+)
 
 
 class PublishGitCodeReleaseTests(unittest.TestCase):
@@ -73,6 +79,27 @@ class PublishGitCodeReleaseTests(unittest.TestCase):
                         sys.modules.pop(name, None)
                     else:
                         sys.modules[name] = module
+
+    def test_upload_asset_uses_a_longer_upload_timeout(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            zip_path = Path(temp_dir) / "Rose-CN-1.2.14.zip"
+            zip_path.write_bytes(b"rose")
+            publisher = GitCodePublisher(
+                owner="Re2347",
+                repo="guoneibanrosedl",
+                token="token",
+            )
+
+            with mock.patch(
+                "scripts.publish_gitcode_release.requests.request",
+                return_value=mock.Mock(status_code=201, text=""),
+            ) as request:
+                publisher.upload_asset(
+                    zip_path,
+                    {"version": "1.2.14", "asset_name": zip_path.name},
+                )
+
+            self.assertEqual(request.call_args.kwargs["timeout"], DEFAULT_UPLOAD_TIMEOUT)
 
 
 if __name__ == "__main__":

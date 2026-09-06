@@ -19,6 +19,8 @@ DEFAULT_OWNER = "Re2347"
 DEFAULT_REPO = "guoneibanrosedl"
 DEFAULT_BRANCH = "main"
 DEFAULT_API_BASE = "https://api.gitcode.com/api/v5"
+DEFAULT_REQUEST_TIMEOUT = 60
+DEFAULT_UPLOAD_TIMEOUT = 300
 
 
 class PublishDecision(Enum):
@@ -55,7 +57,8 @@ class GitCodePublisher:
         token: str,
         branch: str = DEFAULT_BRANCH,
         api_base: str = DEFAULT_API_BASE,
-        timeout: int = 60,
+        timeout: int = DEFAULT_REQUEST_TIMEOUT,
+        upload_timeout: int = DEFAULT_UPLOAD_TIMEOUT,
     ):
         self.owner = owner
         self.repo = repo
@@ -63,6 +66,7 @@ class GitCodePublisher:
         self.branch = branch
         self.api_base = api_base.rstrip("/")
         self.timeout = timeout
+        self.upload_timeout = upload_timeout
 
     def fetch_current_manifest(self) -> Optional[dict]:
         response = requests.get(
@@ -107,6 +111,7 @@ class GitCodePublisher:
                 data={},
                 files={"file": (asset_name, fh, "application/zip")},
                 ok_statuses={200, 201},
+                timeout=self.upload_timeout,
             )
 
     def publish_manifest_file(self, manifest: dict, path: str = "latest.json") -> None:
@@ -147,6 +152,7 @@ class GitCodePublisher:
         data: Optional[dict] = None,
         files: Optional[dict] = None,
         ok_statuses: set[int],
+        timeout: Optional[int] = None,
     ) -> requests.Response:
         params = dict(params or {})
         data = dict(data or {})
@@ -161,7 +167,7 @@ class GitCodePublisher:
             params=params or None,
             data=data or None,
             files=files,
-            timeout=self.timeout,
+            timeout=self.timeout if timeout is None else timeout,
         )
         if response.status_code not in ok_statuses:
             body = response.text[:500].replace(self.token, "***")
